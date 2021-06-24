@@ -106,6 +106,7 @@ class EventBuilder:
         prev_event_ids: List[str],
         auth_event_ids: Optional[List[str]],
         depth: Optional[int] = None,
+        additional_auth_event_ids: Optional[List[str]] = None,
     ) -> EventBase:
         """Transform into a fully signed and hashed event
 
@@ -128,6 +129,9 @@ class EventBuilder:
             auth_event_ids = self._event_auth_handler.compute_auth_events(
                 self, state_ids
             )
+
+        if additional_auth_event_ids:
+            auth_event_ids += additional_auth_event_ids
 
         format_version = self.room_version.event_format
         if format_version == EventFormatVersions.V1:

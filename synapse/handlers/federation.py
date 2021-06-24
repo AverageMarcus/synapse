@@ -1673,7 +1673,7 @@ class FederationHandler(BaseHandler):
 
         # checking the room version will check that we've actually heard of the room
         # (and return a 404 otherwise)
-        room_version = await self.store.get_room_version_id(room_id)
+        room_version = await self.store.get_room_version(room_id)
 
         # now check that we are *still* in the room
         is_in_room = await self._event_auth_handler.check_host_in_room(
@@ -1689,7 +1689,7 @@ class FederationHandler(BaseHandler):
         event_content = {"membership": Membership.JOIN}
 
         builder = self.event_builder_factory.new(
-            room_version,
+            room_version.identifier,
             {
                 "type": EventTypes.Member,
                 "content": event_content,
@@ -1699,21 +1699,83 @@ class FederationHandler(BaseHandler):
             },
         )
 
+        # If the room is a restricted room the auth event ID calculation is a bit
+        # more complicated than the generic methods handle.
+        additional_auth_ids = None
+        current_state_ids = await self.store.get_current_state_ids(room_id)
+        if await self._event_auth_handler.has_restricted_join_rules(
+            current_state_ids, room_version
+        ):
+            additional_auth_ids = [
+                await self._get_user_event_which_could_invite(
+                    room_id, current_state_ids
+                )
+            ]
+
         try:
             event, context = await self.event_creation_handler.create_new_client_event(
-                builder=builder
+                builder=builder, additional_auth_event_ids=additional_auth_ids
             )
         except SynapseError as e:
             logger.warning("Failed to create join to %s because %s", room_id, e)
             raise
 
+        # Ensure the user can even join the room.
+        await self._check_join_restrictions(context, event)
+
         # The remote hasn't signed it yet, obviously. We'll do the full checks
         # when we get the event back in `on_send_join_request`
         await self._event_auth_handler.check_from_context(
-            room_version, event, context, do_sig_check=False
+            room_version.identifier, event, context, do_sig_check=False
         )
 
         return event
+
+    async def _get_user_event_which_could_invite(
+        self, room_id: str, current_state_ids: StateMap[str]
+    ) -> str:
+        """
+        Searches the room state for a local user who has the power level necessary
+        to invite other users.
+
+        Args:
+            room_id: The room ID under search.
+            current_state_ids: The current state of the room.
+
+        Returns:
+            The event ID of the member event.
+
+        Raises:
+            SynapseError if no appropriate user is found.
+        """
+        power_level_event_id = current_state_ids.get((EventTypes.PowerLevels, ""))
+        invite_level = 50
+        users_default_level = 0
+        if power_level_event_id:
+            power_level_event = await self.store.get_event(power_level_event_id)
+            invite_level = power_level_event.get("invite", invite_level)
+            users_default_level = power_level_event.get(
+                "users_default", users_default_level
+            )
+            users = power_level_event.content.get("users", {})
+        else:
+            users = {}
+
+        # Find the user with the highest power level.
+        users_in_room = await self.store.get_users_in_room(room_id)
+        # A tuple of the chosen user's MXID and power level.
+        chosen_user: Optional[Tuple[str, int]] = None
+        for user in users_in_room:
+            user_level = users.get(user, users_default_level)
+            if user_level >= invite_level:
+                if chosen_user is None or user_level >= chosen_user[1]:
+                    chosen_user = (user, user_level)
+
+        if not chosen_user:
+            raise SynapseError(400, "This server cannot issue invites.")
+
+        # Add that user's event ID to the list of auth events.
+        return current_state_ids[(EventTypes.Member, chosen_user[0])]
 
     async def on_invite_request(
         self, origin: str, event: EventBase, room_version: RoomVersion
