@@ -884,7 +884,6 @@ class EventCreationHandler:
         prev_event_ids: Optional[List[str]] = None,
         auth_event_ids: Optional[List[str]] = None,
         depth: Optional[int] = None,
-        additional_auth_event_ids: Optional[List[str]] = None,
     ) -> Tuple[EventBase, EventContext]:
         """Create a new event for a local client
 
@@ -932,7 +931,6 @@ class EventCreationHandler:
             prev_event_ids=prev_event_ids,
             auth_event_ids=auth_event_ids,
             depth=depth,
-            additional_auth_event_ids=additional_auth_event_ids,
         )
 
         old_state = None

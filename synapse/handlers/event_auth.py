@@ -90,7 +90,67 @@ class EventAuthHandler:
             if auth_ev_id:
                 auth_ids.append(auth_ev_id)
 
+        # If the current room is using restricted join rules, an additional event
+        # must be included to assert that the server has the right to authorise
+        # a join event.
+        if event.type == EventTypes.Member:
+            if await self._event_auth_handler.has_restricted_join_rules(
+                current_state_ids, room_version
+            ):
+                additional_auth_id = await self._get_user_event_which_could_invite(
+                    room_id, current_state_ids,
+                )
+                if additional_auth_id:
+                    auth_ids.append(additional_auth_id)
+
         return auth_ids
+
+    async def _get_user_event_which_could_invite(
+        self, room_id: str, current_state_ids: StateMap[str]
+    ) -> Optional[str]:
+        """
+        Searches the room state for a local user who has the power level necessary
+        to invite other users.
+
+        Args:
+            room_id: The room ID under search.
+            current_state_ids: The current state of the room.
+
+        Returns:
+            The event ID of the member event.
+
+        Raises:
+            SynapseError if no appropriate user is found.
+        """
+        power_level_event_id = current_state_ids.get((EventTypes.PowerLevels, ""))
+        invite_level = 50
+        users_default_level = 0
+        if power_level_event_id:
+            power_level_event = await self.store.get_event(power_level_event_id)
+            invite_level = power_level_event.get("invite", invite_level)
+            users_default_level = power_level_event.get(
+                "users_default", users_default_level
+            )
+            users = power_level_event.content.get("users", {})
+        else:
+            users = {}
+
+        # Find the user with the highest power level.
+        users_in_room = await self.store.get_users_in_room(room_id)
+        # A tuple of the chosen user's MXID and power level.
+        chosen_user: Optional[Tuple[str, int]] = None
+        for user in users_in_room:
+            user_level = users.get(user, users_default_level)
+            if user_level >= invite_level:
+                if chosen_user is None or user_level >= chosen_user[1]:
+                    chosen_user = (user, user_level)
+
+        # Add that user's event ID to the list of auth events.
+        if chosen_user:
+            return current_state_ids[(EventTypes.Member, chosen_user[0])]
+
+        # TODO What to do if no event is found?
+        return None
 
     async def check_user_in_room(
         self,

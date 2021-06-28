@@ -237,7 +237,6 @@ class RedactionTestCase(unittest.HomeserverTestCase):
                 prev_event_ids: List[str],
                 auth_event_ids: Optional[List[str]],
                 depth: Optional[int] = None,
-                additional_auth_event_ids: Optional[List[str]] = None,
             ):
                 built_event = await self._base_builder.build(
                     prev_event_ids=prev_event_ids, auth_event_ids=auth_event_ids
